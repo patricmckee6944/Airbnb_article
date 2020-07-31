@@ -1,0 +1,233 @@
+---
+title: "Seattle_Airbnb"
+author: "Patrick McKee"
+date: "July 30, 2020"
+output: html_document
+---
+
+##Data Import
+
+```{r setup, include=FALSE}
+###Read in data
+library(readr)
+data = read_csv("Copy of seattle_01.csv")
+
+```
+
+## EDA of Listing Data
+
+```{r EDA}
+##Structure of Airbnb data
+str(data)
+summary(data)
+####Remove unneeded columns
+data$rate_type <- NULL
+data$currency <- NULL
+data$X1 <- NULL
+data$room_id <- NULL
+data$host_id <- NULL
+data$address <- NULL
+data$latitude <- NULL
+data$longitude <- NULL
+data$name <- NULL
+data$location <- NULL
+data$last_modified <- NULL
+
+###final str of data
+str(data)
+
+```
+
+## Check and Replace for Missing Values
+
+```{r Missing Value Check, echo=FALSE}
+###Missing value check in dataframe
+sum(is.na(data))
+###Display how many missing values in each column
+colSums(is.na(data))
+```
+
+Overall_satisfaction column is missing 1473 values, roughly 20% less than our total amount of Airbnb listings. Need to impute values to fill out missing 20%.
+
+```{r Bathroom missing values}
+###Bathroom missing values
+###Replace missing bathroom values with median
+data$bathrooms[(is.na(data$bathrooms))] <- median(data$bathrooms,na.rm =T)
+###let us impute all the the missing value with mean
+data$overall_satisfaction[is.na(data$overall_satisfaction)] <-  mean(data$overall_satisfaction,na.rm =T)
+
+```
+
+Checking for correlation between price and overall_satisfaction
+
+```{r Overall_Satisfaction missing values}
+####Overall Satisfaction missing values
+table(data$overall_satisfaction)
+####check the correlation betwwen the price and coorelation
+data_complete <- data[complete.cases(data),]
+cor(data_complete$price,data_complete$overall_satisfaction)
+
+
+```
+
+Room type summary and distribution
+
+```{r Room Type Factor Configuration}
+####Room Type structure
+str(data$room_type)
+###distribution of room type
+table(data$room_type)
+
+##summary of data
+summary(data)
+
+###converting review numbers into categorial column
+data$reviews <- ifelse(data$reviews > 100, "Very high", ifelse(data$reviews > 64, "high",ifelse(data$reviews > 47, "med",ifelse(data$reviews > 21 ,"low", 'very low'))))
+###distrubution
+table(data$reviews)
+##str
+str(data$reviews)
+###converting charcter into factor
+data$reviews <- as.factor(data$reviews)
+
+
+```
+
+##Outlier Checks
+
+```{r Accomodates Checks}
+
+##Accommodates Outlier check
+boxplot(data$accommodates)
+###anything abbove 10 is outlier in accomodates
+###putting > 10  to 10
+data$accommodates[data$accommodates > 10] <- 10
+boxplot(data$accommodates, xlab = "After Ouliers Removed", ylab ="accommodates")
+
+```
+
+```{r Price Outlier}
+##Price Outlier check
+boxplot(data$price)
+###anything abbove 3000 is outlier in price
+###putting > 3000  to 3000
+data$price[data$price > 3000] <- 3000
+boxplot(data$price, xlab = "After Ouliers Removed", ylab ="price")
+```
+
+## Creating Price Classes
+
+```{r Price category Class}
+##converting price into classes,
+##1. low  2.median 3.high
+summary(data$price)
+data$price_update <- ifelse(data$price <= 88 , "low", ifelse((data$price > 88 & data$price < 125), "median", ifelse(data$price >= 125, "high","others")))
+
+#New price class distribution & structure
+table(data$price_update)
+str(data$price_update)
+###converting price in factor
+data$price_update <- as.factor(data$price_update)
+###removing price column
+data$price <- NULL
+```
+
+Created classes for prices in Seattle market. Anything equal to or less than \$88 is "Low", greater than \$88 and less than \$125 is "Median", and anything greather than \$125 is "High". 
+
+##Train and Test Sets
+
+```{r Train and Test}
+###Training and Test Set
+library(caret)
+set.seed(1234)
+intrain <- createDataPartition(y = data$price_update, p = 0.8, list = FALSE)
+training <- data[intrain,]
+testing <- data[-intrain,]
+
+###seeing the distrubution of data
+table(training$price_update)
+
+table(testing$price_update)
+```
+
+##Decision Tree
+```{r Decision Tree and rpart}
+###rpart import
+library(rpart)
+library(rpart.plot)
+
+
+#Reminder: Price column set to NULL after creating price_update class column
+model_tree <- rpart(price_update ~.,data = training)
+###summary
+summary(model_tree)
+```
+ 
+### Full Tree Plot
+```{r Full Tree}
+
+###full tree plot
+set.seed(757900)
+tree_full <- rpart(formula=price_update~.,data=training,
+                control=rpart.control(cp=0.0010,minsplit=50,xval=10))
+rpart.plot(tree_full, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+
+```
+
+
+Control Parameter Check - Full Tree
+```{r print tree_full}
+printcp(tree_full)
+```
+
+### Pruned Tree Plot
+```{r pruned tree plot}
+###pruned tree plot
+set.seed(757900)
+tree_prune <- rpart(formula=price_update~.,data=training,
+                control=rpart.control(cp=0.0020,minsplit=5,xval=10))
+rpart.plot(tree_prune, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+```
+
+
+```{r Test Data Full vs. Prune Tree}
+###preidct using tree on test data
+testing$full_tee_pred <- predict(tree_full,testing, type= "class")
+testing$prune_tree_pred <- predict(tree_prune,testing, type ="class")
+
+```
+
+### Confusion Matix Full Tree
+```{r full tree confusion matrix}
+##confusion matrix for the full tree
+confusionMatrix(testing$full_tee_pred,testing$price_update)
+```
+
+### Confusion Matix Pruned Tree
+
+```{r prurned tree confusion matrix}
+##confusion matrix for the pruned tree
+confusionMatrix(testing$prune_tree_pred,testing$price_update)
+```
+
+## Random Forest Model
+```{r Random Forest}
+library(dplyr)
+training=training %>% mutate_if(is.character, as.factor)
+library(randomForest)
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+RF_model <- randomForest(price_update~., data = training, trControl=trctrl, importance=TRUE,proximity=TRUE,ntrees = 100)
+```
+redict on the random forest model and  caclulate the accuracy of the model
+```{r random forest train, test}
+testing=testing %>% mutate_if(is.character, as.factor)
+
+pred_test <- predict(RF_model, testing, type="class")
+pred_train <- predict(RF_model, training, type = "class")
+
+confusionMatrix(pred_test, testing$price_update)
+confusionMatrix(pred_train, training$price_update)
+
+
+```
